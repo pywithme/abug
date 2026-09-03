@@ -11,3 +11,6 @@ wheels/
 
 # macOs
 .DS_Store
+
+# shell
+*.sh
