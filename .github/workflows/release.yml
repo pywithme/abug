@@ -1,0 +1,117 @@
+name: Release
+
+# 触发方式：
+#  1. 推送 v* 标签（如 v0.1.0）→ 构建 sdist/wheel 并创建 GitHub Release，
+#     自动生成更新日志并附带构建产物（不会自动上传 PyPI）。
+#  2. 手动运行（workflow_dispatch）并填写已推送的 tag → 用 Trusted Publishing
+#     将该 tag 的构建产物上传到 PyPI。
+#
+# ── PyPI Trusted Publishing 一次性配置 ──────────────────────────────
+#  PyPI → Your projects → abug → Settings → Publishing →
+#  "Add a new pending publisher" 填写：
+#    Distribution repository : GitHub
+#    Owner                   : pywithme
+#    Repository              : abug
+#    Workflow name           : release.yml
+#    Environment             : （留空）
+# ───────────────────────────────────────────────────────────────────
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布到 PyPI 的标签（必须已推送，如 v0.1.0）"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist & wheel
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.name }}
+    steps:
+      - name: Resolve tag name
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "name=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "Building ${TAG}"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Check tag matches pyproject.toml version
+        if: github.event_name == 'push'
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PYPROJECT_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
+          if [ "${TAG_VERSION}" != "${PYPROJECT_VERSION}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match pyproject.toml version ${PYPROJECT_VERSION}"
+            exit 1
+          fi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build
+        run: uv build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # 推送 v* 标签时：创建 GitHub Release 并附带构建产物
+  github-release:
+    name: Create GitHub Release
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "abug ${GITHUB_REF_NAME}" \
+            --generate-notes
+
+  # 手动触发时：用 Trusted Publishing 上传 PyPI
+  publish-pypi:
+    name: Publish to PyPI
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Trusted Publishing (OIDC) 需要
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

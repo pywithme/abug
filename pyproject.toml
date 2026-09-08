@@ -10,6 +10,12 @@ authors = [
 requires-python = ">=3.8"
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/pywithme/abug"
+Repository = "https://github.com/pywithme/abug"
+Issues = "https://github.com/pywithme/abug/issues"
+Changelog = "https://github.com/pywithme/abug/releases"
+
 [project.scripts]
 abug = "abug.__main__:main"
 
